@@ -299,6 +299,27 @@ func (a *DaprRuntime) sendBatchOutputBindingsParallel(to []string, data []byte) 
 	}
 }
 
+func (a *DaprRuntime) sendBatchOutputListBindingsParallel(outputs []bindings.AppResponseOutput) {
+	for _, o := range outputs {
+		go func(name string, data interface{}, metadata map[string]string) {
+			b, err := a.json.Marshal(&data)
+			if err != nil {
+				log.Error(err)
+				return
+			}
+
+			err = a.sendToOutputBinding(name, &bindings.WriteRequest{
+				Data:     b,
+				Metadata: metadata,
+			})
+
+			if err != nil {
+				log.Error(err)
+			}
+		}(o.Name, o.Data, o.Metadata)
+	}
+}
+
 func (a *DaprRuntime) sendBatchOutputBindingsSequential(to []string, data []byte) error {
 	for _, dst := range to {
 		err := a.sendToOutputBinding(dst, &bindings.WriteRequest{
@@ -308,6 +329,26 @@ func (a *DaprRuntime) sendBatchOutputBindingsSequential(to []string, data []byte
 			return err
 		}
 	}
+	return nil
+}
+
+func (a *DaprRuntime) sendBatchOutputListBindingsSequential(outputs []bindings.AppResponseOutput) error {
+	for _, o := range outputs {
+		b, err := a.json.Marshal(&o.Data)
+		if err != nil {
+			return err
+		}
+
+		err = a.sendToOutputBinding(o.Name, &bindings.WriteRequest{
+			Data:     b,
+			Metadata: o.Metadata,
+		})
+
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -341,6 +382,14 @@ func (a *DaprRuntime) onAppResponse(response *bindings.AppResponse) error {
 			a.sendBatchOutputBindingsParallel(response.To, b)
 		} else {
 			return a.sendBatchOutputBindingsSequential(response.To, b)
+		}
+	}
+
+	if len(response.Outputs) > 0 {
+		if response.Concurrency == parallelConcurrency {
+			a.sendBatchOutputListBindingsParallel(response.Outputs)
+		} else {
+			return a.sendBatchOutputListBindingsSequential(response.Outputs)
 		}
 	}
 
@@ -398,8 +447,10 @@ func (a *DaprRuntime) sendBindingEventToApp(bindingName string, data []byte, met
 		}
 
 		if resp != nil {
+			log.Debugf("Response from app: %s", string(resp.Data))
 			var r bindings.AppResponse
-			err := a.json.Unmarshal(resp.Data, &r)
+			//err := a.json.Unmarshal(resp.Data, &r)
+			err := json.Unmarshal(resp.Data, &r)
 			if err != nil {
 				log.Debugf("error deserializing app response: %s", err)
 			} else {
